@@ -1,73 +1,16 @@
 <script setup lang="ts">
-interface AbilityUpgrade {
-  tier: number
-  desc: string | null
-  descZh: string | null
-}
-interface HeroAbility {
-  id: number | null
-  name: string
-  nameZh: string | null
-  image: string | null
-  desc: string | null
-  descZh: string | null
-  cooldown: number | null
-  upgrades: AbilityUpgrade[]
-}
-interface AbilityOrder {
-  order: number[]
-  matches: number
-  winRate: number
-  pickRate: number
-}
-interface AbilityOrderResponse {
-  orders: AbilityOrder[]
-  totalMatches: number
-}
-interface StageItem {
-  itemId: number
-  matches: number
-  pickRate: number | null
-  winRate: number
-  lift: number | null
-  sig: 'pos' | 'neg' | 'neutral'
-}
-interface StageItemsResponse {
-  early: StageItem[]
-  mid: StageItem[]
-  late: StageItem[]
-  baseline: number | null
-}
-interface Hero {
-  id: number
-  name: string
-  nameZh: string | null
-  image: string | null
-  role: string | null
-  roleZh: string | null
-  gunTag: string | null
-  gunTagZh: string | null
-  gun: { damage: number; bullets: number; fireRate: number; clip: number; dps: number } | null
-  abilities: HeroAbility[]
-}
-interface ItemStatLine {
-  label: string
-  labelZh: string | null
-  value: string
-}
-interface Item {
-  id: number
-  name: string
-  nameZh: string | null
-  slot: 'weapon' | 'vitality' | 'spirit'
-  cost: number
-  tier: number | null
-  isActive: boolean
-  image: string | null
-  desc: string | null
-  descZh: string | null
-  stats: ItemStatLine[]
-}
+import {
+  fetchHeroes,
+  fetchItems,
+  fetchAbilityOrder,
+  fetchStageItems,
+  type Hero,
+  type HeroAbility,
+  type Item,
+  type AbilityOrder,
+  type StageItem,
+  type StageItemsResponse,
+} from '~/lib/deadlock'
 
 // ─── i18n: tiny two-locale dictionary. UI chrome is Traditional Chinese;
 // item/hero data names come bilingually from the API (en + 简中). ───
@@ -159,8 +102,9 @@ function t(key: LocaleKey, vars?: Record<string, string | number>): string {
 }
 useHead(() => ({ htmlAttrs: { lang: locale.value === 'zh' ? 'zh-Hant' : 'en' } }))
 
-const { data: heroes } = await useFetch<Hero[]>('/api/heroes')
-const { data: items } = await useFetch<Item[]>('/api/items')
+// Static SPA: the browser fetches the community deadlock-api directly (CORS open).
+const { data: heroes } = await useAsyncData('heroes', () => fetchHeroes(), { default: () => [] })
+const { data: items } = await useAsyncData('items', () => fetchItems(), { default: () => [] })
 
 const selectedHeroId = ref<number | null>(null)
 const abilityOrders = ref<AbilityOrder[]>([])
@@ -211,14 +155,10 @@ watch(selectedHeroId, async (id) => {
   }
   heroLoading.value = true
   // Each fetch fails independently — a missing panel must not take down
-  // the other. Both routes retry transient upstream hiccups internally.
+  // the other. Both helpers retry transient upstream hiccups internally.
   const [order, stages] = await Promise.all([
-    $fetch<AbilityOrderResponse>('/api/ability-order', { query: { hero_id: id } }).catch(
-      () => null,
-    ),
-    $fetch<StageItemsResponse>('/api/stage-items', { query: { hero_id: id } }).catch(
-      () => null,
-    ),
+    fetchAbilityOrder(id).catch(() => null),
+    fetchStageItems(id).catch(() => null),
   ])
   if (requestId === heroRequestId) {
     abilityOrders.value = order?.orders ?? []
