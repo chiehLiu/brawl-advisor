@@ -48,6 +48,13 @@ const messages = {
     liftTitle: 'Win rate vs this hero’s average (green = above, red = below, grey = not significant)',
     tapInfo: 'Tap for details',
     close: 'Close',
+    loadout: 'Typical Street Brawl loadout on {hero}',
+    loadoutTotal: '{n} items',
+    loadoutHint:
+      'The items players most often run on this hero in Street Brawl, laid into the 4/4/4 slots they fit — a real, coherent loadout (you draft these over the rounds; Brawl has no soul budget, so cost is just for reference). Colored % = win-rate lift vs the hero’s average.',
+    slotWeapon: 'Weapon',
+    slotVitality: 'Vitality',
+    slotSpirit: 'Spirit',
   },
   zh: {
     tagline: 'Street Brawl 出裝選擇助手 — 真實勝率資料來自',
@@ -82,6 +89,13 @@ const messages = {
     liftTitle: '相對此英雄平均勝率的差值（綠＝高於、紅＝低於、灰＝不顯著）',
     tapInfo: '點擊查看詳情',
     close: '關閉',
+    loadout: '{hero} 的 Street Brawl 典型配置',
+    loadoutTotal: '{n} 件',
+    loadoutHint:
+      '此英雄在 Street Brawl 中最常選用的物品，依其所屬的 4／4／4 欄位排好 — 一套真實、合理的配置（你會在各回合逐步抽到；Brawl 沒有魂魄預算，價格僅供參考）。彩色 % = 相對此英雄平均勝率的差值。',
+    slotWeapon: '武器',
+    slotVitality: '生命',
+    slotSpirit: '元靈',
   },
 } as const
 
@@ -159,7 +173,7 @@ watch(selectedHeroId, async (id) => {
   }
   heroLoading.value = true
   // Each fetch fails independently — a missing panel must not take down
-  // the other. Both helpers retry transient upstream hiccups internally.
+  // the other. Helpers retry transient upstream hiccups internally.
   const [order, stages] = await Promise.all([
     fetchAbilityOrder(id).catch(() => null),
     fetchStageItems(id).catch(() => null),
@@ -195,6 +209,41 @@ const stageColumns = computed(() => {
   ] as const
 })
 const hasStageData = computed(() => stageColumns.value.some((c) => c.picks.length > 0))
+
+// ─── Typical Brawl loadout: the most-picked items overall, grouped into the
+// 4/4/4 slot system (Brawl has slot caps, no soul budget). Each carries its
+// pick rate + win-rate lift, so it's a real, coherent, mode-native loadout. ───
+const SLOT_ORDER = ['weapon', 'vitality', 'spirit'] as const
+const SLOT_CAP = 4
+interface LoadoutPick {
+  item: Item
+  pickRate: number | null
+  lift: number | null
+  sig: 'pos' | 'neg' | 'neutral'
+}
+const loadoutView = computed(() => {
+  const overall = stageItems.value?.overall
+  if (!overall || !overall.length) return null
+  const byId = new Map((items.value ?? []).map((i) => [i.id, i]))
+  const seen = new Set<number>()
+  const groups = SLOT_ORDER.map((slot) => {
+    const picks: LoadoutPick[] = []
+    for (const r of overall) {
+      if (picks.length >= SLOT_CAP) break
+      if (seen.has(r.itemId)) continue
+      const item = byId.get(r.itemId)
+      if (item && item.slot === slot) {
+        seen.add(r.itemId)
+        picks.push({ item, pickRate: r.pickRate, lift: r.lift, sig: r.sig })
+      }
+    }
+    return { slot, picks }
+  }).filter((g) => g.picks.length > 0)
+  if (!groups.length) return null
+  const totalCost = groups.reduce((s, g) => s + g.picks.reduce((c, p) => c + p.item.cost, 0), 0)
+  const count = groups.reduce((s, g) => s + g.picks.length, 0)
+  return { groups, count, totalCost }
+})
 
 // ─── Detail popover: CLICK an item/hero to toggle it. Anchored to the element
 // (no cursor-following), and dismissed reliably on scroll / Escape / outside-
@@ -298,6 +347,13 @@ function formatLift(value: number): string {
 function formatCount(value: number): string {
   return value >= 1000 ? (value / 1000).toFixed(1) + 'k' : String(value)
 }
+const SLOT_LABEL_KEY = { weapon: 'slotWeapon', vitality: 'slotVitality', spirit: 'slotSpirit' } as const
+function slotTitle(slot: 'weapon' | 'vitality' | 'spirit'): string {
+  return t(SLOT_LABEL_KEY[slot])
+}
+function formatSouls(value: number): string {
+  return value.toLocaleString('en-US')
+}
 </script>
 
 <template>
@@ -383,6 +439,52 @@ function formatCount(value: number): string {
         </div>
       </div>
       <p class="hint">{{ t('stageHint') }}</p>
+    </section>
+
+    <section v-if="selectedHero && loadoutView" class="panel">
+      <h2>{{ t('loadout', { hero: heroName }) }}</h2>
+      <p class="build-meta">
+        <span>{{ t('loadoutTotal', { n: loadoutView.count }) }}</span>
+        <span class="build-fav">{{ formatSouls(loadoutView.totalCost) }} {{ t('tipSouls') }}</span>
+      </p>
+      <div class="stage-grid">
+        <div v-for="g in loadoutView.groups" :key="g.slot" class="stage-col">
+          <h3 class="stage-col-title">
+            <span class="slot" :class="g.slot">{{ slotTitle(g.slot) }}</span>
+            <span class="slot-count">{{ g.picks.length }}/{{ SLOT_CAP }}</span>
+          </h3>
+          <ol class="stage-items">
+            <li
+              v-for="p in g.picks"
+              :key="p.item.id"
+              class="stage-item clickable"
+              :class="{ active: tip?.kind === 'item' && tip.item.id === p.item.id }"
+              :title="t('tapInfo')"
+              @click.stop="toggleItemTip(p.item, $event)"
+            >
+              <img
+                v-if="p.item.image"
+                :src="p.item.image"
+                :alt="p.item.name"
+                class="item-icon"
+                :class="p.item.slot"
+              />
+              <span v-else class="item-icon fallback" :class="p.item.slot">{{ p.item.name[0] }}</span>
+              <span class="stage-item-name">{{ dispName(p.item.name, p.item.nameZh) }}</span>
+              <span class="stage-item-stats">
+                <span class="stage-pick">{{ p.item.cost }}</span>
+                <span
+                  v-if="p.lift != null"
+                  class="stage-lift"
+                  :class="p.sig"
+                  :title="t('liftTitle')"
+                >{{ formatLift(p.lift) }}</span>
+              </span>
+            </li>
+          </ol>
+        </div>
+      </div>
+      <p class="hint">{{ t('loadoutHint') }}</p>
     </section>
 
     <section v-if="selectedHero && selectedHero.abilities.length" class="panel">
@@ -995,6 +1097,30 @@ body {
   font-size: 0.85rem;
   color: #f2c879;
   font-weight: 600;
+}
+.slot-count {
+  margin-left: 0.4rem;
+  color: #6b6358;
+  font-weight: 400;
+}
+.build-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.3rem 0.9rem;
+  margin: -0.3rem 0 0.9rem;
+  color: #a89f91;
+  font-size: 0.85rem;
+}
+.build-name {
+  color: #cfc4b2;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.build-fav {
+  color: #f2c879;
 }
 .stage-items {
   list-style: none;

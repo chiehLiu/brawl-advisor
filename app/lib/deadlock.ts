@@ -74,6 +74,7 @@ export interface StageItemsResponse {
   early: StageItem[]
   mid: StageItem[]
   late: StageItem[]
+  overall: StageItem[]
   baseline: number | null
 }
 
@@ -378,6 +379,7 @@ function rankStage(
   rows: { item_id: number; wins: number; matches: number }[],
   heroMatches: number | null,
   baseline: number | null,
+  limit = TOP_PER_STAGE,
 ): StageItem[] {
   return rows
     .filter((r) => r.matches >= STAGE_SAMPLE_MIN)
@@ -398,7 +400,7 @@ function rankStage(
       }
     })
     .sort((a, b) => (b.pickRate ?? b.winRate) - (a.pickRate ?? a.winRate))
-    .slice(0, TOP_PER_STAGE)
+    .slice(0, limit)
 }
 
 export async function fetchStageItems(heroId: number): Promise<StageItemsResponse> {
@@ -411,22 +413,38 @@ export async function fetchStageItems(heroId: number): Promise<StageItemsRespons
   const heroMatches = baseStat?.matches ?? null
   const baseline = baseStat && baseStat.matches > 0 ? baseStat.wins / baseStat.matches : null
 
-  const results = await Promise.all(
-    STAGES.map((stage) => {
-      const query: Record<string, string> = {
-        game_mode: 'street_brawl',
-        hero_id: String(heroId),
-        min_matches: '20',
-      }
-      if (stage.min != null) query.min_bought_at_s = String(stage.min)
-      if (stage.max != null) query.max_bought_at_s = String(stage.max)
-      return ofetch<{ item_id: number; wins: number; matches: number }[]>(
-        `${V1}/analytics/item-stats`,
-        { query, ...FETCH_OPTS },
-      )
-        .then((rows) => rankStage(rows, heroMatches, baseline))
-        .catch(() => [] as StageItem[])
-    }),
-  )
-  return { early: results[0], mid: results[1], late: results[2], baseline }
+  const itemStats = (query: Record<string, string>) =>
+    ofetch<{ item_id: number; wins: number; matches: number }[]>(`${V1}/analytics/item-stats`, {
+      query,
+      ...FETCH_OPTS,
+    })
+
+  const [stageResults, overallRows] = await Promise.all([
+    Promise.all(
+      STAGES.map((stage) => {
+        const query: Record<string, string> = {
+          game_mode: 'street_brawl',
+          hero_id: String(heroId),
+          min_matches: '20',
+        }
+        if (stage.min != null) query.min_bought_at_s = String(stage.min)
+        if (stage.max != null) query.max_bought_at_s = String(stage.max)
+        return itemStats(query)
+          .then((rows) => rankStage(rows, heroMatches, baseline))
+          .catch(() => [] as StageItem[])
+      }),
+    ),
+    // Overall (no buy-time filter) — the typical full loadout, grouped by slot
+    // in the UI. Larger limit so every slot category fills.
+    itemStats({ game_mode: 'street_brawl', hero_id: String(heroId), min_matches: '20' })
+      .then((rows) => rankStage(rows, heroMatches, baseline, 40))
+      .catch(() => [] as StageItem[]),
+  ])
+  return {
+    early: stageResults[0],
+    mid: stageResults[1],
+    late: stageResults[2],
+    overall: overallRows,
+    baseline,
+  }
 }
