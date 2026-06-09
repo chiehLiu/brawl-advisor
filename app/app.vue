@@ -46,6 +46,8 @@ const messages = {
     stageHint:
       'Ranked by how often players pick each item at that stage (% = pick rate). The colored number is win-rate lift vs this hero’s average: green = beats it, red = below it, grey = within noise. Win rate alone is misleading (popular/snowball items inflate it), so this shows what players actually build and whether it truly helps.',
     liftTitle: 'Win rate vs this hero’s average (green = above, red = below, grey = not significant)',
+    tapInfo: 'Tap for details',
+    close: 'Close',
   },
   zh: {
     tagline: 'Street Brawl 出裝選擇助手 — 真實勝率資料來自',
@@ -78,6 +80,8 @@ const messages = {
     stageHint:
       '依玩家在該階段選用的頻率排序（% = 選用率）。彩色數字是相對此英雄平均勝率的差值：綠＝高於平均、紅＝低於平均、灰＝在誤差範圍內。單看勝率會誤導（熱門／滾雪球物品會虛高），所以這裡顯示玩家實際會選什麼，以及它是否真的有幫助。',
     liftTitle: '相對此英雄平均勝率的差值（綠＝高於、紅＝低於、灰＝不顯著）',
+    tapInfo: '點擊查看詳情',
+    close: '關閉',
   },
 } as const
 
@@ -192,27 +196,67 @@ const stageColumns = computed(() => {
 })
 const hasStageData = computed(() => stageColumns.value.some((c) => c.picks.length > 0))
 
-// ─── Hover tooltip: one fixed-position card driven by mouse events. ───
+// ─── Detail popover: CLICK an item/hero to toggle it. Anchored to the element
+// (no cursor-following), and dismissed reliably on scroll / Escape / outside-
+// click — so it never lingers the way a hover tooltip does. Works on touch too.
 const tip = ref<{ kind: 'item'; item: Item } | { kind: 'hero'; hero: Hero } | null>(null)
 const tipPos = ref({ x: 0, y: 0 })
-function moveTip(event: MouseEvent) {
-  // Hero cards are taller (4 abilities + gun block) — clamp accordingly.
-  const estimatedHeight = tip.value?.kind === 'hero' ? 520 : 290
-  const x = Math.min(event.clientX + 14, window.innerWidth - 340)
-  const y = Math.min(event.clientY + 12, window.innerHeight - estimatedHeight)
-  tipPos.value = { x: Math.max(8, x), y: Math.max(8, y) }
+// On phones the popover becomes a bottom sheet (full-width), not an anchored card.
+const narrow = ref(false)
+
+// Place the popover beside the clicked element, flipping/clamping to the viewport.
+function positionTip(el: HTMLElement, tall: boolean) {
+  if (narrow.value) return // bottom-sheet handles its own position via CSS
+  const rect = el.getBoundingClientRect()
+  const w = 320
+  const h = tall ? 520 : 290
+  let x = rect.right + 10
+  if (x + w > window.innerWidth - 8) x = rect.left - w - 10
+  x = Math.min(Math.max(8, x), window.innerWidth - w - 8)
+  const y = Math.min(Math.max(8, rect.top), window.innerHeight - h - 8)
+  tipPos.value = { x, y }
 }
-function showItemTip(item: Item, event: MouseEvent) {
+function toggleItemTip(item: Item, event: MouseEvent) {
+  if (tip.value?.kind === 'item' && tip.value.item.id === item.id) {
+    tip.value = null
+    return
+  }
   tip.value = { kind: 'item', item }
-  moveTip(event)
+  positionTip(event.currentTarget as HTMLElement, false)
 }
-function showHeroTip(hero: Hero, event: MouseEvent) {
+function toggleHeroTip(hero: Hero, event: MouseEvent) {
+  if (tip.value?.kind === 'hero' && tip.value.hero.id === hero.id) {
+    tip.value = null
+    return
+  }
   tip.value = { kind: 'hero', hero }
-  moveTip(event)
+  positionTip(event.currentTarget as HTMLElement, true)
 }
-function hideTip() {
+function closeTip() {
   tip.value = null
 }
+function onTipKey(e: KeyboardEvent) {
+  if (e.key === 'Escape') closeTip()
+}
+// Triggers and the popover stop propagation, so a document click here is a
+// genuine outside-click. Scroll/resize also dismiss (the anchor would move).
+function onResize() {
+  narrow.value = window.innerWidth < 560
+  closeTip()
+}
+onMounted(() => {
+  narrow.value = window.innerWidth < 560
+  window.addEventListener('scroll', closeTip, { capture: true, passive: true })
+  window.addEventListener('resize', onResize)
+  document.addEventListener('click', closeTip)
+  document.addEventListener('keydown', onTipKey)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('scroll', closeTip, { capture: true })
+  window.removeEventListener('resize', onResize)
+  document.removeEventListener('click', closeTip)
+  document.removeEventListener('keydown', onTipKey)
+})
 // A hovered element can unmount without firing mouseleave (hero switched,
 // stage data reloaded) — clear the tip when its source disappears.
 // stageColumns is watched because it updates asynchronously when the stage
@@ -282,10 +326,9 @@ function formatCount(value: number): string {
           v-if="selectedHero?.image"
           :src="selectedHero.image"
           :alt="selectedHero.name"
-          class="hero-portrait"
-          @mouseenter="showHeroTip(selectedHero!, $event)"
-          @mousemove="moveTip"
-          @mouseleave="hideTip"
+          class="hero-portrait clickable"
+          :title="t('tapInfo')"
+          @click.stop="toggleHeroTip(selectedHero!, $event)"
         />
         <select v-model.number="selectedHeroId" class="hero-select">
           <option :value="null" disabled>{{ t('pickHero') }}</option>
@@ -308,10 +351,10 @@ function formatCount(value: number): string {
             <li
               v-for="pick in col.picks"
               :key="pick.item.id"
-              class="stage-item"
-              @mouseenter="showItemTip(pick.item, $event)"
-              @mousemove="moveTip"
-              @mouseleave="hideTip"
+              class="stage-item clickable"
+              :class="{ active: tip?.kind === 'item' && tip.item.id === pick.item.id }"
+              :title="t('tapInfo')"
+              @click.stop="toggleItemTip(pick.item, $event)"
             >
               <img
                 v-if="pick.item.image"
@@ -409,12 +452,15 @@ function formatCount(value: number): string {
       <a href="https://github.com/deadlock-api" target="_blank" rel="noopener">deadlock-api</a>.
     </footer>
 
-    <!-- ─── Floating hover tooltip ─── -->
+    <!-- ─── Click-toggled detail popover ─── -->
     <div
       v-if="tip"
       class="tip"
-      :style="{ left: tipPos.x + 'px', top: tipPos.y + 'px' }"
+      :class="{ 'tip--sheet': narrow }"
+      :style="narrow ? undefined : { left: tipPos.x + 'px', top: tipPos.y + 'px' }"
+      @click.stop
     >
+      <button class="tip-close" type="button" :aria-label="t('close')" @click="closeTip">×</button>
       <template v-if="tip.kind === 'item'">
         <div class="tip-header">
           <img
@@ -734,7 +780,14 @@ body {
   font-size: 0.82rem;
 }
 
-/* ─── Tooltip ─── */
+/* ─── Detail popover (click-toggled) ─── */
+.clickable {
+  cursor: pointer;
+}
+.stage-item.active {
+  outline: 1px solid #f2c879;
+  border-radius: 6px;
+}
 .tip {
   position: fixed;
   z-index: 50;
@@ -744,8 +797,22 @@ body {
   border-radius: 10px;
   padding: 0.8rem 0.95rem;
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
-  pointer-events: none;
   font-size: 0.88rem;
+}
+.tip-close {
+  position: absolute;
+  top: 0.3rem;
+  right: 0.45rem;
+  background: none;
+  border: none;
+  color: #847b6e;
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.1rem 0.25rem;
+}
+.tip-close:hover {
+  color: #f2c879;
 }
 .tip-header {
   display: flex;
@@ -1021,5 +1088,49 @@ body {
   font-weight: 600;
   font-size: 0.85rem;
   margin-bottom: 0.35rem;
+}
+
+/* ─── Mobile: popover becomes a bottom sheet; tighter spacing ─── */
+.tip--sheet {
+  left: 0 !important;
+  right: 0;
+  top: auto !important;
+  bottom: 0;
+  width: auto;
+  max-height: 72vh;
+  overflow-y: auto;
+  border-radius: 14px 14px 0 0;
+  border-bottom: none;
+  padding-bottom: 1.2rem;
+}
+@media (max-width: 560px) {
+  .page {
+    padding: 1rem 0.8rem 3rem;
+  }
+  .header h1 {
+    font-size: 1.65rem;
+  }
+  .panel {
+    padding: 0.9rem 0.85rem;
+  }
+  .hero-select {
+    min-width: 0;
+    flex: 1;
+  }
+  .hero-row {
+    width: 100%;
+  }
+  /* Single-column stages/abilities (auto-fit already collapses, this enforces it) */
+  .stage-grid,
+  .ability-list {
+    grid-template-columns: 1fr;
+  }
+  .order-row {
+    gap: 0.4rem;
+  }
+  .tip-close {
+    font-size: 1.5rem;
+    padding: 0.25rem 0.5rem;
+  }
 }
 </style>
