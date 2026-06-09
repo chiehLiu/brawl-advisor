@@ -250,6 +250,7 @@ interface RawItem {
   shopable: boolean | null
   is_active_item: boolean | null
   image_webp: string | null
+  shop_image_webp: string | null
   description?: { desc?: string | null } | null
   properties?: Record<string, RawProperty | undefined> | null
   tooltip_sections?: Array<{ section_attributes?: RawTooltipAttr[] | null }> | null
@@ -304,7 +305,8 @@ export async function fetchItems(): Promise<Item[]> {
         cost: i.cost ?? 0,
         tier: i.item_tier,
         isActive: i.is_active_item === true,
-        image: i.image_webp,
+        // shop_image matches the in-game shop icon; fall back to the mod icon.
+        image: i.shop_image_webp ?? i.image_webp,
         desc: stripMarkup(i.description?.desc),
         descZh: stripMarkup(zhItem?.description?.desc),
         stats,
