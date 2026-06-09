@@ -6,6 +6,8 @@ export default defineNuxtConfig({
   ssr: false,
   // Adds .nojekyll (so /_nuxt assets aren't ignored) + a 404.html SPA fallback.
   nitro: { preset: 'github_pages' },
+  // tesseract.js is CommonJS — pre-bundle it so the OCR worker loads cleanly.
+  vite: { optimizeDeps: { include: ['tesseract.js'] } },
   // baseURL is set at build time via NUXT_APP_BASE_URL (=/brawl-advisor/ in CI)
   // so local dev stays at root.
   app: {

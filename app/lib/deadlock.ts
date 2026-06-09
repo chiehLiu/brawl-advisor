@@ -76,6 +76,15 @@ export interface StageItemsResponse {
   late: StageItem[]
   overall: StageItem[]
   baseline: number | null
+  heroMatches: number | null
+}
+// One co-occurrence record: how many games ran BOTH items a and b. Drives the
+// "real build" panel — which items players actually run together, vs which are
+// slot alternatives.
+export interface ItemPair {
+  a: number
+  b: number
+  matches: number
 }
 
 // ─── Shared helpers ───
@@ -441,10 +450,29 @@ export async function fetchStageItems(heroId: number): Promise<StageItemsRespons
       .catch(() => [] as StageItem[]),
   ])
   return {
-    early: stageResults[0],
-    mid: stageResults[1],
-    late: stageResults[2],
+    early: stageResults[0] ?? [],
+    mid: stageResults[1] ?? [],
+    late: stageResults[2] ?? [],
     overall: overallRows,
     baseline,
+    heroMatches,
   }
+}
+
+// ─── Item co-occurrence: which items players actually run TOGETHER ───
+// comb_size=2 returns every item PAIR with the count of games that ran both
+// (≈180KB gzip per hero, 0.3s). Larger comb sizes are infeasible (comb_size=3
+// is ~10MB, =4 is ~150MB). We keep only (a, b, matches) — enough to tell a
+// genuine combo from two items that are merely each popular.
+export async function fetchItemPairs(heroId: number): Promise<ItemPair[]> {
+  const rows = await ofetch<{ item_ids: number[]; matches: number }[]>(
+    `${V1}/analytics/item-permutation-stats`,
+    { query: { game_mode: 'street_brawl', hero_id: heroId, comb_size: 2 }, ...FETCH_OPTS },
+  )
+  const pairs: ItemPair[] = []
+  for (const r of rows) {
+    const [a, b] = r.item_ids ?? []
+    if (a !== undefined && b !== undefined) pairs.push({ a, b, matches: r.matches })
+  }
+  return pairs
 }

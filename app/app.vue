@@ -19,6 +19,8 @@ const messages = {
     tagline: 'Street Brawl item drafting, backed by real win rates from',
     yourHero: 'Your hero',
     pickHero: 'Pick your hero…',
+    modeCopilot: 'Draft co-pilot',
+    modeReference: 'Reference',
     loadingStats: 'Loading {hero} data…',
     footerText: 'Community project — not affiliated with Valve. Data via the open-source',
     tipActive: 'Active',
@@ -60,6 +62,8 @@ const messages = {
     tagline: 'Street Brawl 出裝選擇助手 — 真實勝率資料來自',
     yourHero: '你的英雄',
     pickHero: '選擇你的英雄…',
+    modeCopilot: '抽選助手',
+    modeReference: '資料參考',
     loadingStats: '正在載入 {hero} 的數據…',
     footerText: '社群專案 — 與 Valve 無關。資料來自開源的',
     tipActive: '主動',
@@ -125,6 +129,10 @@ const { data: heroes } = await useAsyncData('heroes', () => fetchHeroes(), { def
 const { data: items } = await useAsyncData('items', () => fetchItems(), { default: () => [] })
 
 const selectedHeroId = ref<number | null>(null)
+// Two modes share the hero selector: the hands-off draft co-pilot (recommends
+// the best pick each round, conditioned on the build so far) and the detailed
+// reference (stage picks, abilities, upgrade order).
+const mode = ref<'copilot' | 'reference'>('copilot')
 const abilityOrders = ref<AbilityOrder[]>([])
 const stageItems = ref<StageItemsResponse | null>(null)
 const heroLoading = ref(false)
@@ -398,6 +406,23 @@ function formatSouls(value: number): string {
       </p>
     </section>
 
+    <nav v-if="selectedHero" class="mode-toggle">
+      <button type="button" :class="{ active: mode === 'copilot' }" @click="mode = 'copilot'">
+        {{ t('modeCopilot') }}
+      </button>
+      <button type="button" :class="{ active: mode === 'reference' }" @click="mode = 'reference'">
+        {{ t('modeReference') }}
+      </button>
+    </nav>
+
+    <DraftCopilot
+      v-if="selectedHero && mode === 'copilot'"
+      :hero="selectedHero"
+      :items="items ?? []"
+      :locale="locale"
+    />
+
+    <template v-if="mode === 'reference'">
     <section v-if="selectedHero && hasStageData" class="panel">
       <h2>{{ t('bestByStage', { hero: heroName }) }}</h2>
       <div class="stage-grid">
@@ -548,6 +573,7 @@ function formatSouls(value: number): string {
       <p v-else-if="heroLoading" class="hint">{{ t('loadingStats', { hero: heroName }) }}</p>
       <p v-else class="hint">{{ t('noOrderData') }}</p>
     </section>
+    </template>
 
     <footer class="footer">
       {{ t('footerText') }}
@@ -775,6 +801,29 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
+}
+.mode-toggle {
+  display: inline-flex;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  background: #15110d;
+  border: 1px solid #2e2822;
+  border-radius: 10px;
+  margin-bottom: 1rem;
+}
+.mode-toggle button {
+  background: transparent;
+  border: none;
+  color: #9c9488;
+  padding: 0.4rem 1rem;
+  border-radius: 7px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.mode-toggle button.active {
+  background: #f2c879;
+  color: #1a1611;
 }
 .item-icon {
   width: 26px;
