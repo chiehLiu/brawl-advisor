@@ -20,6 +20,15 @@ export interface Detected {
   score: number // 0..1 fuzzy confidence
 }
 
+// Optional diagnostics filled in when a debug collector is passed to
+// recognizeItems — lets the UI show what was actually captured/read.
+export interface RecognizeDebug {
+  frameW: number
+  frameH: number
+  avgLuma: number // 0..255 average brightness; near 0 = black capture (exclusive fullscreen)
+  passes: { variant: string; text: string }[]
+}
+
 export function buildNameIndex(items: Item[]): NameEntry[] {
   return items.map((i) => ({ id: i.id, name: i.name, slot: i.slot, norm: i.name.toLowerCase() }))
 }
@@ -145,6 +154,27 @@ export async function disposeRecognizer(): Promise<void> {
 const MATCH_CUTOFF = 0.6
 const WANT = 3 // a Street Brawl round offers 3
 
+// Average brightness of a tiny downsample — a near-black value means the capture
+// is empty (e.g. an exclusive-fullscreen game gives a black screen-share frame).
+function sampleBrightness(source: CanvasImageSource, srcW: number, srcH: number): number {
+  const s = 48
+  const c = document.createElement('canvas')
+  c.width = s
+  c.height = s
+  const ctx = c.getContext('2d')
+  if (!ctx || !srcW || !srcH) return -1
+  // Diagnostic only — must never abort the scan, so swallow any draw/read error.
+  try {
+    ctx.drawImage(source, 0, 0, s, s)
+    const d = ctx.getImageData(0, 0, s, s).data
+    let sum = 0
+    for (let i = 0; i < d.length; i += 4) sum += 0.299 * d[i]! + 0.587 * d[i + 1]! + 0.114 * d[i + 2]!
+    return Math.round(sum / (s * s))
+  } catch {
+    return -1
+  }
+}
+
 // Recognize the offered items in a frame. Runs grayscale first; only adds the
 // invert + blue-channel passes if it hasn't found the full set yet (keeps the
 // common case to a single OCR pass).
@@ -153,13 +183,20 @@ export async function recognizeItems(
   srcW: number,
   srcH: number,
   index: NameEntry[],
+  debug?: RecognizeDebug,
 ): Promise<Detected[]> {
   const worker = await initRecognizer()
   const hits = new Map<number, Detected>()
+  if (debug) {
+    debug.frameW = srcW
+    debug.frameH = srcH
+    debug.avgLuma = sampleBrightness(source, srcW, srcH)
+  }
 
   const runPass = async (variant: Variant) => {
     const canvas = toVariant(source, srcW, srcH, variant)
     const { data } = await worker.recognize(canvas)
+    if (debug) debug.passes.push({ variant, text: data.text })
     for (const phrase of extractPhrases(data.text)) {
       let best: NameEntry | null = null
       let bestScore = 0

@@ -8,7 +8,7 @@ import {
   type HeroDraftModel,
   type ScoredPick,
 } from '~/lib/copilot'
-import { buildNameIndex, recognizeItems } from '~/lib/recognize'
+import { buildNameIndex, recognizeItems, type RecognizeDebug, type Detected } from '~/lib/recognize'
 
 const props = defineProps<{ hero: Hero | null; items: Item[]; locale: 'en' | 'zh' }>()
 
@@ -232,6 +232,13 @@ const scanError = ref('')
 const videoEl = ref<HTMLVideoElement | null>(null)
 const photoInput = ref<HTMLInputElement | null>(null)
 const photoBusy = ref(false)
+// Diagnostics: open the app with ?debug (or #debug) to show, under the scan
+// area, the captured frame size, brightness, raw OCR text, and matches — so a
+// real-game scan that "finds nothing" can be diagnosed from evidence.
+const debugOn =
+  typeof location !== 'undefined' &&
+  (location.search.includes('debug') || location.hash.includes('debug'))
+const debugInfo = ref<(RecognizeDebug & { detected: Detected[] }) | null>(null)
 let stream: MediaStream | null = null
 let scanTimer: ReturnType<typeof setInterval> | null = null
 let recognizing = false
@@ -247,7 +254,11 @@ async function recognizeFromSource(source: CanvasImageSource, w: number, h: numb
   recognizing = true
   const myGen = scanGen
   try {
-    const found = await recognizeItems(source, w, h, nameIndex.value)
+    const dbg: RecognizeDebug | undefined = debugOn
+      ? { frameW: 0, frameH: 0, avgLuma: 0, passes: [] }
+      : undefined
+    const found = await recognizeItems(source, w, h, nameIndex.value, dbg)
+    if (dbg) debugInfo.value = { ...dbg, detected: found } // always show what was read
     if (myGen !== scanGen) return true // hero switched / scan stopped / unmounted while OCR ran
     const items = found
       .map((f) => byId.value.get(f.id))
@@ -406,6 +417,28 @@ if (import.meta.dev && typeof window !== 'undefined') {
       <p v-if="scanSupported" class="hint cp-scan-hint">{{ d.scanHint }}</p>
       <p class="hint cp-scan-hint">{{ d.photoHint }}</p>
 
+      <!-- diagnostics (only with ?debug): shows what the scan actually captured/read -->
+      <div v-if="debugOn && debugInfo" class="cp-debug">
+        <div class="cp-debug-row">
+          frame {{ debugInfo.frameW }}×{{ debugInfo.frameH }} · brightness {{ debugInfo.avgLuma }}/255
+          <span v-if="debugInfo.avgLuma >= 0 && debugInfo.avgLuma < 8" class="cp-debug-warn">
+            ⚠ near-black — game may be in exclusive Fullscreen (use Borderless Windowed)
+          </span>
+        </div>
+        <div class="cp-debug-row">
+          matched:
+          {{
+            debugInfo.detected.length
+              ? debugInfo.detected.map((x) => x.name + ' (' + x.score + ')').join(', ')
+              : '(none)'
+          }}
+        </div>
+        <details>
+          <summary>raw OCR text — {{ debugInfo.passes.length }} pass(es)</summary>
+          <pre v-for="p in debugInfo.passes" :key="p.variant">[{{ p.variant }}] {{ p.text || '(empty)' }}</pre>
+        </details>
+      </div>
+
       <!-- build so far -->
       <div class="cp-build">
         <div class="cp-build-head">
@@ -539,6 +572,36 @@ if (import.meta.dev && typeof window !== 'undefined') {
 }
 .cp-file {
   display: none;
+}
+.cp-debug {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  background: #0c0a08;
+  border: 1px solid #3a3128;
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
+  color: #b8b0a4;
+  margin-top: -0.4rem;
+}
+.cp-debug-row {
+  word-break: break-word;
+  margin-bottom: 0.3rem;
+}
+.cp-debug-warn {
+  color: #e08a8a;
+}
+.cp-debug summary {
+  cursor: pointer;
+  color: #f2c879;
+}
+.cp-debug pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0.35rem 0 0;
+  max-height: 9rem;
+  overflow: auto;
+  color: #cfc7ba;
 }
 .cp-scan-status {
   color: #8fc78f;
