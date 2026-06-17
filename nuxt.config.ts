@@ -6,8 +6,6 @@ export default defineNuxtConfig({
   ssr: false,
   // Adds .nojekyll (so /_nuxt assets aren't ignored) + a 404.html SPA fallback.
   nitro: { preset: 'github_pages' },
-  // tesseract.js is CommonJS — pre-bundle it so the OCR worker loads cleanly.
-  vite: { optimizeDeps: { include: ['tesseract.js'] } },
   // Global base styles (extracted from the old single-page app.vue) so every
   // route shares the same chrome/panel/popover classes.
   css: ['~/assets/css/main.css'],
