@@ -8,16 +8,19 @@ export default defineNuxtConfig({
   nitro: { preset: 'github_pages' },
   // tesseract.js is CommonJS — pre-bundle it so the OCR worker loads cleanly.
   vite: { optimizeDeps: { include: ['tesseract.js'] } },
+  // Global base styles (extracted from the old single-page app.vue) so every
+  // route shares the same chrome/panel/popover classes.
+  css: ['~/assets/css/main.css'],
   // baseURL is set at build time via NUXT_APP_BASE_URL (=/brawl-advisor/ in CI)
   // so local dev stays at root.
   app: {
     head: {
-      title: 'Brawl Advisor — Deadlock Street Brawl',
+      title: 'Brawl Advisor — Deadlock hero guides',
       meta: [
         {
           name: 'description',
           content:
-            'Deadlock Street Brawl hero reference: most-picked items by stage, abilities, and upgrade order. Data from deadlock-api.com.',
+            'Learn any Deadlock hero: abilities, recommended builds, leveling order, and how to actually play them — for 6v6 and Street Brawl. Data from deadlock-api.com.',
         },
       ],
     },

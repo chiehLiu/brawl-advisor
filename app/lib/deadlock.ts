@@ -6,6 +6,10 @@ import { ofetch } from 'ofetch'
 const V1 = 'https://api.deadlock-api.com/v1'
 const FETCH_OPTS = { retry: 2, retryDelay: 400, timeout: 20000 } as const
 
+// 6v6 standard = 'normal'; 4v4 Street Brawl = 'street_brawl'. Analytics endpoints
+// are mode-specific; asset/catalog data (heroes, items, abilities) is shared.
+export type GameMode = 'normal' | 'street_brawl'
+
 // ─── Public types (shared with the UI) ───
 export interface AbilityUpgrade {
   tier: number
@@ -27,8 +31,14 @@ export interface Hero {
   name: string
   nameZh: string | null
   image: string | null
+  cardImage: string | null // larger portrait card for the hero-select grid
   role: string | null
   roleZh: string | null
+  playstyle: string | null // Valve's official one-paragraph playstyle blurb
+  playstyleZh: string | null
+  complexity: number | null // Valve's 1-3 difficulty rating
+  heroType: string | null // marksman | mystic | brawler | assassin (Valve)
+  tags: string[]
   gunTag: string | null
   gunTagZh: string | null
   gun: { damage: number; bullets: number; fireRate: number; clip: number; dps: number } | null
@@ -113,9 +123,12 @@ interface RawHero {
   id: number
   name: string
   gun_tag?: string | null
-  description?: { role?: string | null } | null
+  complexity?: number | null
+  hero_type?: string | null
+  tags?: string[] | null
+  description?: { role?: string | null; playstyle?: string | null } | null
   items?: Record<string, string | undefined> | null
-  images?: { icon_image_small_webp?: string | null } | null
+  images?: { icon_image_small_webp?: string | null; icon_hero_card_webp?: string | null } | null
 }
 interface RawWeaponInfo {
   bullet_damage?: number | null
@@ -235,8 +248,14 @@ export async function fetchHeroes(): Promise<Hero[]> {
         name: h.name,
         nameZh: zhName && zhName !== h.name ? zhName : null,
         image: h.images?.icon_image_small_webp ?? null,
+        cardImage: h.images?.icon_hero_card_webp ?? null,
         role: h.description?.role ?? null,
         roleZh: zhHero?.description?.role ?? null,
+        playstyle: stripMarkup(h.description?.playstyle),
+        playstyleZh: stripMarkup(zhHero?.description?.playstyle),
+        complexity: typeof h.complexity === 'number' ? h.complexity : null,
+        heroType: h.hero_type ?? null,
+        tags: Array.isArray(h.tags) ? h.tags : [],
         gunTag: h.gun_tag ?? null,
         gunTagZh: zhHero?.gun_tag ?? null,
         gun: buildGun(weapon?.weapon_info),
@@ -335,10 +354,13 @@ function firstPickOrder(sequence: number[]): number[] {
   return seen
 }
 
-export async function fetchAbilityOrder(heroId: number): Promise<AbilityOrderResponse> {
+export async function fetchAbilityOrder(
+  heroId: number,
+  gameMode: GameMode = 'normal',
+): Promise<AbilityOrderResponse> {
   const rows = await ofetch<{ abilities: number[]; wins: number; matches: number }[]>(
     `${V1}/analytics/ability-order-stats`,
-    { query: { game_mode: 'street_brawl', hero_id: heroId, min_matches: 20 }, ...FETCH_OPTS },
+    { query: { game_mode: gameMode, hero_id: heroId, min_matches: 20 }, ...FETCH_OPTS },
   )
   const byOrder = new Map<string, { order: number[]; matches: number; wins: number }>()
   let totalMatches = 0
@@ -475,4 +497,75 @@ export async function fetchItemPairs(heroId: number): Promise<ItemPair[]> {
     if (a !== undefined && b !== undefined) pairs.push({ a, b, matches: r.matches })
   }
   return pairs
+}
+
+// ─── Recommended builds (6v6) ───
+// "Verified community builds": rank the published builds players ACTUALLY run by
+// real win/play rate from hero-build-stats (not author-favorites), then pull each
+// build's item list from /v1/builds. Builds are a 6v6/shop concept — Street Brawl
+// has no shop, so this is normal-mode only. The UI resolves itemIds → catalog
+// items, computes the Weapon/Spirit/Tank archetype, and adds the playstyle note.
+export interface HeroBuild {
+  buildId: number
+  name: string
+  authorId: number
+  matches: number
+  winRate: number
+  players: number
+  itemIds: number[] // ordered, deduped across the build's categories
+}
+
+interface RawBuildMod {
+  ability_id?: number | null
+}
+interface RawBuildCategory {
+  mods?: RawBuildMod[] | null
+}
+interface RawHeroBuild {
+  name?: string | null
+  author_account_id?: number | null
+  details?: { mod_categories?: RawBuildCategory[] | null } | null
+}
+
+const BUILD_MIN_MATCHES = 500
+const TOP_BUILDS = 3
+
+export async function fetchHeroBuilds(heroId: number): Promise<HeroBuild[]> {
+  const stats = await ofetch<
+    { hero_build_id: number; wins: number; matches: number; players: number }[]
+  >(`${V1}/analytics/hero-build-stats/${heroId}`, {
+    query: { min_matches: BUILD_MIN_MATCHES },
+    ...FETCH_OPTS,
+  }).catch(() => [] as { hero_build_id: number; wins: number; matches: number; players: number }[])
+
+  const top = [...stats].sort((a, b) => b.matches - a.matches).slice(0, TOP_BUILDS)
+
+  const builds = await Promise.all(
+    top.map(async (s): Promise<HeroBuild | null> => {
+      const res = await ofetch<{ hero_build?: RawHeroBuild }[]>(`${V1}/builds`, {
+        query: { build_id: s.hero_build_id, only_latest: 'true' },
+        ...FETCH_OPTS,
+      }).catch(() => [] as { hero_build?: RawHeroBuild }[])
+      const hb = res[0]?.hero_build
+      if (!hb) return null
+      const itemIds: number[] = []
+      for (const cat of hb.details?.mod_categories ?? []) {
+        for (const mod of cat.mods ?? []) {
+          const id = mod.ability_id
+          if (typeof id === 'number' && !itemIds.includes(id)) itemIds.push(id)
+        }
+      }
+      if (!itemIds.length) return null
+      return {
+        buildId: s.hero_build_id,
+        name: hb.name ?? `Build ${s.hero_build_id}`,
+        authorId: hb.author_account_id ?? 0,
+        matches: s.matches,
+        winRate: s.matches > 0 ? s.wins / s.matches : 0,
+        players: s.players,
+        itemIds,
+      }
+    }),
+  )
+  return builds.filter((b): b is HeroBuild => b !== null)
 }
