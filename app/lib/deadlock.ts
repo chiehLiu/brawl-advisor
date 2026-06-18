@@ -104,6 +104,16 @@ function stripMarkup(text: string | null | undefined, cap = false): string | nul
   return cap && clean.length > ABILITY_DESC_MAX ? clean.slice(0, ABILITY_DESC_MAX) + '…' : clean
 }
 
+// Some abilities (e.g. Shiv's Killing Blow, Drifter's Bloodscent) leave `desc`
+// empty and put the text in `active` / `passive` instead. Fall back to those so
+// the base blurb isn't blank.
+function baseDesc(d: RawCatalogItem['description'], cap = true): string | null {
+  const direct = stripMarkup(d?.desc, cap)
+  if (direct) return direct
+  const joined = [d?.active, d?.passive].filter(Boolean).join(' ')
+  return stripMarkup(joined || null, cap)
+}
+
 // ─── Raw upstream shapes ───
 interface RawProperty {
   value?: string | number | null
@@ -137,7 +147,14 @@ interface RawCatalogItem {
   name?: string | null
   image_webp?: string | null
   weapon_info?: RawWeaponInfo | null
-  description?: { desc?: string | null; t1_desc?: string | null; t2_desc?: string | null; t3_desc?: string | null } | null
+  description?: {
+    desc?: string | null
+    active?: string | null
+    passive?: string | null
+    t1_desc?: string | null
+    t2_desc?: string | null
+    t3_desc?: string | null
+  } | null
   properties?: Record<string, RawProperty | undefined> | null
   upgrades?: RawUpgradeTier[] | null
 }
@@ -153,11 +170,14 @@ function synthTier(
     .map((up) => {
       const prop = properties?.[up.name ?? '']
       if (!prop?.label) return null
-      const n = Number(up.bonus)
+      // Some bonuses bake the unit into the string (e.g. "3.5m", "15m"), so
+      // Number() returns NaN and the whole tier used to vanish. parseFloat reads
+      // the leading number and drops the unit; the prop's postfix re-adds it.
+      const n = parseFloat(String(up.bonus))
       if (!Number.isFinite(n) || n === 0) return null
       const suffix = prop.postfix || (prop.display_units ? UNIT_SUFFIX[prop.display_units] ?? '' : '')
       const sign = n > 0 ? '+' : ''
-      return `${sign}${up.bonus}${suffix} ${prop.label}`
+      return `${sign}${n}${suffix} ${prop.label}`
     })
     .filter((p): p is string => p !== null)
   return parts.length ? parts.join(', ') : null
@@ -228,8 +248,8 @@ export async function fetchHeroes(): Promise<Hero[]> {
           name: enAbility.name,
           nameZh: zhAbility?.name && zhAbility.name !== enAbility.name ? zhAbility.name : null,
           image: enAbility.image_webp ?? null,
-          desc: stripMarkup(enAbility.description?.desc, true),
-          descZh: stripMarkup(zhAbility?.description?.desc, true),
+          desc: baseDesc(enAbility.description),
+          descZh: baseDesc(zhAbility?.description),
           cooldown: cooldown > 0 ? cooldown : null,
           upgrades,
         }
