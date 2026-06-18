@@ -22,3 +22,7 @@ logs
 .env
 .env.*
 !.env.example
+.wf-out/
+.wf-gen-teaching.py
+.wf-rest32-teaching.js
+.wf-lean-teaching.js
